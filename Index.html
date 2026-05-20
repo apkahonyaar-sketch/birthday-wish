@@ -106,6 +106,7 @@
             line-height: 1.6;
             margin-bottom: 15px;
             max-width: 90%;
+            word-wrap: break-word;
         }
 
         .highlight {
@@ -333,7 +334,7 @@
         <div class="screen" id="screen-wish">
             <h1>Happy Birthday, <br><span id="partner-name-wish" class="highlight">My Future</span>! 🎉</h1>
             <p>Today, you are officially turning <span id="partner-age" class="highlight">X</span>!</p>
-            <p>Even though miles keep us apart today, my heart is right next to yours. I am so incredibly proud of who you are, and I can't wait for all the birthdays we will celebrate side by side. You make my world brighter every single day.</p>
+            <p>Even though miles keep us apart today, my heart is right next to yours. I am so incredibly proud of who you are, and I can't wait for all the birthdays we will celebrate side by side.</p>
             <p class="highlight">Ready to celebrate your day?</p>
             <button class="btn" onclick="nextScreen('screen-candle')">Let's See the Cake! 🎂</button>
         </div>
@@ -402,7 +403,8 @@
         let micStream = null;
         let baselineVolume = 0;
         let baselineSamples = 0;
-        const BASELINE_SAMPLE_COUNT = 30;
+        const BASELINE_SAMPLE_COUNT = 20;
+        const BLOW_SENSITIVITY = 1.5; // Lower = easier to trigger (1.5 is good, try 1.2-2.0)
 
         // Initialize page data
         function initializePageData() {
@@ -469,7 +471,7 @@
             }
         }
 
-        // Microphone Blowing Listener
+        // Microphone Blowing Listener - IMPROVED
         function initMic() {
             const indicator = document.getElementById('mic-indicator');
             
@@ -483,9 +485,9 @@
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 analyser = audioContext.createAnalyser();
                 microphone = audioContext.createMediaStreamSource(stream);
-                javascriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+                javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
 
-                analyser.smoothingTimeConstant = 0.85;
+                analyser.smoothingTimeConstant = 0.8;
                 analyser.fftSize = 2048;
 
                 microphone.connect(analyser);
@@ -496,6 +498,7 @@
                 let blowCounter = 0;
                 baselineSamples = 0;
                 baselineVolume = 0;
+                let previousVolume = 0;
 
                 javascriptNode.onaudioprocess = function() {
                     if (candleBlown) return; // Prevent multiple triggers
@@ -503,35 +506,46 @@
                     try {
                         const array = new Uint8Array(analyser.frequencyBinCount);
                         analyser.getByteFrequencyData(array);
-                        const currentVolume = array.reduce((a, b) => a + b) / array.length;
+                        
+                        // Calculate RMS volume (more accurate than average)
+                        let sum = 0;
+                        for (let i = 0; i < array.length; i++) {
+                            sum += array[i] * array[i];
+                        }
+                        const rms = Math.sqrt(sum / array.length);
+                        const currentVolume = rms;
                         
                         // Update volume bar
                         const volumeBar = document.getElementById('volume-bar');
                         if (volumeBar) {
-                            const volumePercent = Math.min((currentVolume / 150) * 100, 100);
+                            const volumePercent = Math.min((currentVolume / 120) * 100, 100);
                             volumeBar.style.width = volumePercent + '%';
                         }
                         
-                        // Establish baseline from first 30 samples
+                        // Establish baseline from first samples
                         if (baselineSamples < BASELINE_SAMPLE_COUNT) {
                             baselineVolume += currentVolume;
                             baselineSamples++;
+                            previousVolume = currentVolume;
                             return;
                         }
 
                         // Calculate average baseline
                         const avgBaseline = baselineVolume / BASELINE_SAMPLE_COUNT;
-                        const volumeThreshold = Math.max(avgBaseline + 25, 60);
+                        const volumeThreshold = Math.max(avgBaseline + 20, 40);
+                        const volumeIncrease = currentVolume - previousVolume;
 
-                        // Detect blow: significant sustained volume
-                        if (currentVolume > volumeThreshold && currentVolume > avgBaseline * 1.3) {
+                        // Detect blow: sustained high volume AND rapid increase
+                        if (currentVolume > volumeThreshold && currentVolume > avgBaseline * BLOW_SENSITIVITY && volumeIncrease > 10) {
                             blowCounter++;
-                            if (blowCounter >= 2) {
+                            if (blowCounter >= 3) {
                                 candleBlown_trigger();
                             }
-                        } else {
+                        } else if (blowCounter > 0) {
                             blowCounter = Math.max(0, blowCounter - 1);
                         }
+
+                        previousVolume = currentVolume;
                     } catch (error) {
                         console.error('Error processing audio:', error);
                     }
