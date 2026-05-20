@@ -181,6 +181,17 @@
             background: #ffebee;
         }
 
+        .mic-status.detecting {
+            color: #ff9f43;
+            background: #fff8e1;
+            animation: pulse 0.6s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
         /* The Cake & Candle Graphics */
         .cake-container {
             position: relative;
@@ -312,6 +323,13 @@
             border-radius: 4px;
             transition: width 0.1s ease;
         }
+
+        .help-text {
+            font-size: 0.85rem;
+            color: #999;
+            margin-top: 10px;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -334,7 +352,7 @@
         <div class="screen" id="screen-wish">
             <h1>Happy Birthday, <br><span id="partner-name-wish" class="highlight">My Future</span>! 🎉</h1>
             <p>Today, you are officially turning <span id="partner-age" class="highlight">X</span>!</p>
-            <p>Even though miles keep us apart today, my heart is right next to yours. I am so incredibly proud of who you are, and I can't wait for all the birthdays we will celebrate side by side.</p>
+            <p>Even though miles keep us apart today, my heart is right next to yours. I am so incredibly proud of who you are, and I can't wait for all the birthdays we will celebrate side by si[...]
             <p class="highlight">Ready to celebrate your day?</p>
             <button class="btn" onclick="nextScreen('screen-candle')">Let's See the Cake! 🎂</button>
         </div>
@@ -359,6 +377,7 @@
             <div class="volume-indicator">
                 <div class="volume-bar" id="volume-bar"></div>
             </div>
+            <p class="help-text" id="help-text">💡 Make a quick "psh" sound or blow gently - it's very sensitive!</p>
         </div>
 
         <!-- Screen 4: Cut the Cake -->
@@ -403,8 +422,9 @@
         let micStream = null;
         let baselineVolume = 0;
         let baselineSamples = 0;
-        const BASELINE_SAMPLE_COUNT = 20;
-        const BLOW_SENSITIVITY = 1.5; // Lower = easier to trigger (1.5 is good, try 1.2-2.0)
+        const BASELINE_SAMPLE_COUNT = 15;
+        const BLOW_SENSITIVITY = 0.8; // MUCH LOWER = MUCH EASIER TO TRIGGER
+        const BLOW_THRESHOLD_MULTIPLIER = 1.1; // Lower multiplier for easier detection
 
         // Initialize page data
         function initializePageData() {
@@ -471,24 +491,24 @@
             }
         }
 
-        // Microphone Blowing Listener - IMPROVED
+        // Microphone Blowing Listener - MUCH EASIER TO TRIGGER
         function initMic() {
             const indicator = document.getElementById('mic-indicator');
             
             navigator.mediaDevices.getUserMedia({ audio: true, video: false })
             .then(function(stream) {
                 micStream = stream;
-                indicator.innerHTML = "🎙️ Mic Active: Blow into it now!";
+                indicator.innerHTML = "🎙️ Mic Active: Try blowing now!";
                 indicator.classList.add('active');
                 indicator.classList.remove('error');
 
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 analyser = audioContext.createAnalyser();
                 microphone = audioContext.createMediaStreamSource(stream);
-                javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+                javascriptNode = audioContext.createScriptProcessor(1024, 1, 1);
 
-                analyser.smoothingTimeConstant = 0.8;
-                analyser.fftSize = 2048;
+                analyser.smoothingTimeConstant = 0.6;
+                analyser.fftSize = 1024;
 
                 microphone.connect(analyser);
                 analyser.connect(javascriptNode);
@@ -499,6 +519,7 @@
                 baselineSamples = 0;
                 baselineVolume = 0;
                 let previousVolume = 0;
+                let maxVolumeSeen = 0;
 
                 javascriptNode.onaudioprocess = function() {
                     if (candleBlown) return; // Prevent multiple triggers
@@ -507,7 +528,7 @@
                         const array = new Uint8Array(analyser.frequencyBinCount);
                         analyser.getByteFrequencyData(array);
                         
-                        // Calculate RMS volume (more accurate than average)
+                        // Calculate RMS volume
                         let sum = 0;
                         for (let i = 0; i < array.length; i++) {
                             sum += array[i] * array[i];
@@ -515,10 +536,15 @@
                         const rms = Math.sqrt(sum / array.length);
                         const currentVolume = rms;
                         
+                        // Track max volume
+                        if (currentVolume > maxVolumeSeen) {
+                            maxVolumeSeen = currentVolume;
+                        }
+                        
                         // Update volume bar
                         const volumeBar = document.getElementById('volume-bar');
                         if (volumeBar) {
-                            const volumePercent = Math.min((currentVolume / 120) * 100, 100);
+                            const volumePercent = Math.min((currentVolume / 80) * 100, 100);
                             volumeBar.style.width = volumePercent + '%';
                         }
                         
@@ -532,17 +558,27 @@
 
                         // Calculate average baseline
                         const avgBaseline = baselineVolume / BASELINE_SAMPLE_COUNT;
-                        const volumeThreshold = Math.max(avgBaseline + 20, 40);
+                        const volumeThreshold = Math.max(avgBaseline * BLOW_THRESHOLD_MULTIPLIER, 25);
                         const volumeIncrease = currentVolume - previousVolume;
 
-                        // Detect blow: sustained high volume AND rapid increase
-                        if (currentVolume > volumeThreshold && currentVolume > avgBaseline * BLOW_SENSITIVITY && volumeIncrease > 10) {
+                        // EASIER DETECTION: Just need volume spike OR sustained higher volume
+                        if (currentVolume > volumeThreshold && volumeIncrease > 5) {
                             blowCounter++;
-                            if (blowCounter >= 3) {
+                            
+                            // Show user feedback
+                            const helpText = document.getElementById('help-text');
+                            if (helpText) {
+                                helpText.textContent = `📊 Keep blowing! (${blowCounter}/2)`;
+                            }
+                            
+                            if (blowCounter >= 2) {
                                 candleBlown_trigger();
                             }
+                        } else if (currentVolume > volumeThreshold && blowCounter > 0) {
+                            // Keep counter alive if still above threshold
+                            blowCounter = Math.max(blowCounter - 0.2, 0);
                         } else if (blowCounter > 0) {
-                            blowCounter = Math.max(0, blowCounter - 1);
+                            blowCounter = Math.max(0, blowCounter - 0.5);
                         }
 
                         previousVolume = currentVolume;
@@ -660,6 +696,10 @@
             const volumeBar = document.getElementById('volume-bar');
             if (volumeBar) {
                 volumeBar.style.width = '0%';
+            }
+            const helpText = document.getElementById('help-text');
+            if (helpText) {
+                helpText.textContent = '💡 Make a quick "psh" sound or blow gently - it\'s very sensitive!';
             }
             nextScreen('screen-welcome');
         }
